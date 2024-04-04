@@ -18,7 +18,7 @@ Daemon to trigger zfs-autobackup when attaching backup disk.
    On TrueNAS SCALE: System Settings -> Advanced -> Init/Shutdown Scripts -> Add
     Description: trigger-zfs-autobackup;
     Type: Script;
-    Script: '/path/to/trigger.sh --start';
+    Script: '/path/to/trigger.sh --start /path/to/config.yaml';
     When: Post Init 
    -> Save
 4. Manually insert backup disk whenever you want to make a backup.
