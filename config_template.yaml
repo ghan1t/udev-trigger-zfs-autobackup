@@ -6,14 +6,11 @@ logging:
   level: "DEBUG"
   logfile_path: "/mnt/path/to/logfile.log"
 
-# Enter an smtp configuration. Remove this config entirely, if you do not want so send mails.
-# Keep this config somewhere only root can read because you need to enter your mail password
-smtp:
-  server: "smtp.example.com"
-  port: 587
-  login: "your_email@example.com"
-  password: "your_password"
-  recipients: "recipient1@example.com, recipient2@example.com, recipient3@example.com"
+# Enter an email configuration. Remove this config entirely, if you do not want so send mails.
+# Note that this requires you to have configured TrueNAS email at Alerts -> Email.
+email:
+  fromaddr: "admin"
+  recipients: "admin"
   send_autobackup_output: true
 
 # List any pools you want to backup
