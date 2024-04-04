@@ -40,7 +40,7 @@ def main(config_file: str, test: bool):
     if test:
         for device_label, pool_config in config.pools.items():
             if is_device_connected(device_label):
-                beep_pattern("1111001010", 0.2, 0.1)
+                beep()
                 logger.log(f"Starting manual backup on Pool {device_label}...")
                 decrypt_and_backup(device_label, pool_config, config, logger)
     else:
@@ -62,7 +62,6 @@ def device_event(action, device):
     fs_uuid = device.get('ID_FS_UUID')
     # print(f"Event {action} for {fs_label} action {device.action} uuid {fs_uuid}")
     if fs_type == "zfs_member" and fs_label and fs_label in config.pools:
-        beep()
         if action == "add":
             added_devices.put(fs_label)
             logger.log(f"udev observed add of pool {fs_label}")
@@ -80,7 +79,7 @@ def start_waiting_for_udev_trigger():
             backup_event.wait()  # Wait for an event
             # Check for added devices first
             while not added_devices.empty():
-                beep_pattern("101111001010", 0.2, 0.1)
+                beep()
                 device_label = added_devices.get()
                 logger.log(f"Pool {device_label} has been added to queue. Starting backup...")
                 import_decrypt_backup_export(device_label, config, logger)
@@ -101,7 +100,7 @@ def start_waiting_for_udev_trigger():
                         if not is_device_connected(device_label):
                             finished_devices.discard(device_label)
                 beep()
-                time.sleep(3)  # Delay between each check
+                time.sleep(10)  # Delay between each check
 
     except KeyboardInterrupt:
         logger.log("Received KeyboardInterrupt...")
@@ -120,17 +119,8 @@ def is_device_connected(device_label):
     return os.path.islink(os.path.join(disk_by_label_path, device_label))
 
 def beep():
-    open('/dev/tty5','w').write('\a')
-
-def beep_pattern(pattern, sleep_duration, beep_duration):
-    for digit in pattern:
-        if digit == '1':
-            beep()
-            time.sleep(beep_duration)
-        elif digit == '0':
-            time.sleep(sleep_duration)
-        else:
-            print("Invalid character in binary string")
+    with open('/dev/tty5','w') as f:
+        f.write('\a')
 
 if __name__ == "__main__":
      # Set up command-line argument parsing
