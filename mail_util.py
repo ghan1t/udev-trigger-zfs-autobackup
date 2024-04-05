@@ -1,3 +1,4 @@
+import os
 import subprocess
 from email.message import EmailMessage
 from log_util import Logging
@@ -13,9 +14,14 @@ def send_email(subject, body, config: EmailConfig, logger: Logging):
     message['From'] = config.fromaddr  # Set email from
     message['To'] = config.recipients # All recipients
 
+    # On TrueNAS, sendmail is a python script, so we must not leak our private venv to it.
+    child_env = os.environ
+    if 'VIRTUAL_ENV' in os.environ:
+        child_env['PATH'] = '/usr/local/bin:/usr/bin:/bin:/usr/games'
+
     # Send the email
     try:
-        subprocess.run(["/usr/sbin/sendmail", "-t", "-i"], input=message.as_bytes(), check=True)
+        subprocess.run(["/usr/sbin/sendmail", "-t", "-i"], env=child_env, input=message.as_bytes(), check=True)
         logger.log(f"Email sent successfully to {config.recipients}!")
     except subprocess.CalledProcessError as e:
         logger.error(f"Error sending email to {config.recipients}: {e}")
