@@ -190,14 +190,10 @@ start_application() {
         echo -e "Virtual environment not found at ${VENV}.\nDid you run \"${SCRIPT_NAME} --install\" yet?"
         exit
     fi
-    # Activate the virtual environment
-    echo "Activating python venv in ${VENV}"
-    . "${VENV}/bin/activate"
 
     # Start monitoring udev events
     echo "Spawn monitor.py in the background..."
-    (cd "${SCRIPT_DIR}" && python3 monitor.py $CONFIG_PATH &)
-    # python3 monitor.py $CONFIG_PATH
+    (nohup "${VENV}/bin/python3" monitor.py $CONFIG_PATH 0<&- &>/dev/null &)
 }
 
 # Function to handle stop
@@ -237,16 +233,11 @@ test_zfs_autobackup() {
         echo -e "Virtual environment not found at ${VENV}.\nDid you run \"${SCRIPT_NAME} --install\" yet?"
         exit
     fi
-    # Activate the virtual environment
-    echo "Activating python venv in ${VENV}"
-    . "${VENV}/bin/activate"
-    # setting installed packages into pythonpath if installation is somehow broken
-    #export PYTHONPATH="${VENV}/lib/python3.11/site-packages:${VENV}/lib64/python3.11/site-packages:$PYTHONPATH"
 
     # Execute the config as a test
     echo "Executing zfs-autobackup with ${CONFIG_PATH}"
     # python3 monitor.py --test $CONFIG_PATH
-    (cd "${SCRIPT_DIR}" && python3 monitor.py --test $CONFIG_PATH)
+    "${VENV}/bin/python3" monitor.py --test $CONFIG_PATH
 }
 
 parse_params() {
