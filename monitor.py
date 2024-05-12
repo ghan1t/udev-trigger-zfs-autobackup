@@ -2,133 +2,97 @@
 
 # To be called by trigger.sh
 import os
-from subprocess import check_call
-import pyudev
+import pyudev  # type: ignore [import-untyped]
 
-import subprocess
-import configparser
 import argparse
 from config_reader import read_validate_config
-import threading
-import time
 import queue
-import sys
 from log_util import Logging
 from backup import decrypt_and_backup, import_decrypt_backup_export
 
-# Shared resources
-added_devices = queue.Queue()
-removed_devices = queue.Queue()
-finished_devices = set()  # Using a set for finished devices
-finished_devices_lock = threading.Lock()  # Lock for accessing the finished_devices set
+FINISHED_BEEP_INTERVAL = 10 # seconds
 
-# Event to indicate there are devices to process
-backup_event = threading.Event()
-observer = None
-pools_lookup = None
-config = None
-logger = None
+class UdevAutobackupMonitor:
+    def __init__(self, config_file: str):
+        self.device_events: queue.Queue[tuple[str, str]] = queue.Queue()
+        self.config = read_validate_config(config_file)
 
-def main(config_file: str, test: bool):
-    global config, logger
-    config = read_validate_config(config_file)
+        # Set up logging based on configuration
+        self.logger = Logging(self.config.logging)
 
-    # Set up logging based on configuration
-    logger = Logging(config.logging)
+    def run(self, test: bool = False):
+        self.logger.log(f"started monitor.py with config:\n{self.config}")
+        if test:
+            for device_label, pool_config in self.config.pools.items():
+                if is_device_connected(device_label):
+                    beep()
+                    self.logger.log(f"Starting manual backup on Pool {device_label}...")
+                    decrypt_and_backup(device_label, pool_config, self.config, self.logger)
+        else:
+            self.logger.log('Using pyudev version: {0}'.format(pyudev.__version__))
+            monitor = pyudev.Monitor.from_netlink(pyudev.Context())
+            monitor.filter_by('block')
+            self._wait_for_udev_triggers(monitor)
 
-    logger.log(f"started monitor.py with config:\n{config}")
-    if test:
-        for device_label, pool_config in config.pools.items():
-            if is_device_connected(device_label):
-                beep()
-                logger.log(f"Starting manual backup on Pool {device_label}...")
-                decrypt_and_backup(device_label, pool_config, config, logger)
-    else:
-        start_udev_monitoring()
-        start_waiting_for_udev_trigger()        
+    # Callback for device events, runs in a separate thread
+    def _device_callback(self, device: pyudev.Device) -> None:
+        fs_type = device.get('ID_FS_TYPE')
+        fs_label = device.get('ID_FS_LABEL')
+        #fs_uuid = device.get('ID_FS_UUID')
+        if fs_type == "zfs_member" and fs_label and fs_label in self.config.pools and device.action in ("add", "remove"):
+            self.logger.log(f"udev observed {device.action} of pool {fs_label}")
+            self.device_events.put((device.action, fs_label))
 
-def start_udev_monitoring():
-    logger.log('Using pyudev version: {0}'.format(pyudev.__version__))
-    monitor = pyudev.Monitor.from_netlink(pyudev.Context())
-    monitor.filter_by('block')
-    global observer
-    observer = pyudev.MonitorObserver(monitor, device_event)
-    observer.start()
+    def _wait_for_udev_triggers(self, monitor: pyudev.Monitor) -> None:
+        observer = pyudev.MonitorObserver(monitor, callback=self._device_callback)
+        observer.start()
+        finished_devices: set[str] = set()
 
-# Callback for device events
-def device_event(action, device):
-    fs_type = device.get('ID_FS_TYPE')
-    fs_label = device.get('ID_FS_LABEL')
-    fs_uuid = device.get('ID_FS_UUID')
-    # print(f"Event {action} for {fs_label} action {device.action} uuid {fs_uuid}")
-    if fs_type == "zfs_member" and fs_label and fs_label in config.pools:
-        if action == "add":
-            added_devices.put(fs_label)
-            logger.log(f"udev observed add of pool {fs_label}")
-            backup_event.set()
-        elif action == "remove":
-            logger.log(f"udev observed remove of pool {fs_label}")
-            with finished_devices_lock:
-                finished_devices.discard(fs_label)  # Remove from finished devices set if it's removed
-            backup_event.set()
-
-def start_waiting_for_udev_trigger():
-    # Main processing logic
-    try:
-        while True:
-            backup_event.wait()  # Wait for an event
-            # Check for added devices first
-            while not added_devices.empty():
-                beep()
-                device_label = added_devices.get()
-                logger.log(f"Pool {device_label} has been added to queue. Starting backup...")
-                import_decrypt_backup_export(device_label, config, logger)
-                with finished_devices_lock:
-                    finished_devices.add(device_label)  # Add to finished devices set
-            
-            # Reset the event in case this was the last added device being processed
-            if added_devices.empty():
-                backup_event.clear()
-     
-            # If there are finished devices and no more added devices, begin beeping
-            # Continuously beep for finished devices if they are still connected
+        try:
             while True:
-                with finished_devices_lock:
-                    if not finished_devices:
-                        break  # Exit the loop if finished_devices is empty
-                    for device_label in list(finished_devices):  # Iterate over a copy
-                        if not is_device_connected(device_label):
-                            finished_devices.discard(device_label)
-                beep()
-                time.sleep(10)  # Delay between each check
+                # block indefinitely for an event, unless we're waiting for removal of finished devices
+                try:
+                    action, device_label = self.device_events.get(block=True, timeout=(FINISHED_BEEP_INTERVAL if finished_devices else None))
+                except queue.Empty:
+                    # Continuously beep for finished devices if they are still connected
+                    beep()
+                    continue
 
-    except KeyboardInterrupt:
-        logger.log("Received KeyboardInterrupt...")
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred: {e}")
-    finally:
-        logger.log("Stopping PYUDEV and Shutting down...")
-        observer.stop()  # Stop observer
-        sys.exit(0)
+                if action == "add":
+                    beep()
+                    self.logger.log(f"Pool {device_label} has been added to queue. Starting backup...")
+                    import_decrypt_backup_export(device_label, self.config, self.logger)
+                    finished_devices.add(device_label)  # Add to finished devices set
+                elif action == "remove":
+                    finished_devices.discard(device_label)
 
-def is_device_connected(device_label):
-    # Path where disk labels are linked
-    disk_by_label_path = '/dev/disk/by-label/'
+        except KeyboardInterrupt:
+            self.logger.log("Received KeyboardInterrupt...")
+        except Exception as e:
+            self.logger.exception(f"An unexpected error occurred: {e}")
+        finally:
+            self.logger.log("Stopping PYUDEV and Shutting down...")
+            observer.stop()
+            # sys.exit(0)
 
-    # Check if a symbolic link exists for this label
-    return os.path.islink(os.path.join(disk_by_label_path, device_label))
 
-def beep():
+def is_device_connected(device_label: str) -> bool:
+    return os.path.islink(os.path.join('/dev/disk/by-label', device_label))
+
+
+def beep() -> None:
     with open('/dev/tty5','w') as f:
         f.write('\a')
 
+
 if __name__ == "__main__":
      # Set up command-line argument parsing
-    parser = argparse.ArgumentParser(description="Process a YAML config file.")
-    parser.add_argument('config_file', type=str, help='Path to the YAML config file to be processed')
-    parser.add_argument("--test", help="test the zfs-backup with the given YAML config file", action="store_true")
+    parser = argparse.ArgumentParser(description="UDEV monitor to start zfs-autobackup jobs")
+    parser.add_argument('config_file', type=str, help='Path to the YAML config file')
+    parser.add_argument("--test", help="test zfs-backup with the given config file", action="store_true")
 
     # Parse command-line arguments
     args = parser.parse_args()
 
-    main(args.config_file, args.test)
+    app = UdevAutobackupMonitor(args.config_file)
+    app.run(test=args.test)

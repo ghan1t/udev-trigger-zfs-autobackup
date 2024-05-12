@@ -59,7 +59,7 @@ TEST=0
 INSTALL_PARAMS=""
 
 # Define the GitHub repository URL
-REPO_URL="https://github.com/ghan1t/udev-trigger-zfs-autobackup.git"
+REPO_URL="https://github.com/0xabu/udev-trigger-zfs-autobackup.git"
 
 # Function to check if Git is installed
 check_git() {
@@ -173,13 +173,8 @@ update_dependencies() {
         exit
     fi
 
-    # Activate the virtual environment
-    . "${VENV}/bin/activate"
-
     # Install our dependencies inside the virtual environment
-    python3 -m pip install -r requirements.txt
-
-    deactivate
+    "${VENV}/bin/python3" -m pip install -r requirements.txt
 }
 
 # Function to handle start
@@ -326,8 +321,7 @@ main() {
         die "Error: More than one variable is set to true."
     elif [ "$sum" -eq 0 ]; then
         usage
-        sleep 1
-        exit 0
+        exit 1
     fi
 
     if [ "$INSTALL" = 1 ]; then
@@ -339,32 +333,25 @@ main() {
         echo "Follow these steps next:"
         echo ""
         echo -e "$STEPS"
-        
-        sleep 1
-        exit 0
     fi
 
     if [ "$UPDATE_DEPENDENCIES" = 1 ]; then
         update_dependencies
-        sleep 1
         exit 0
     fi
 
     if [ "$START" = 1 ]; then
        start_application
-       sleep 1
        exit 0
     fi
 
     if [ "$STOP" = 1 ]; then
        stop_application
-       sleep 1
       exit 0
     fi
 
     if [ "$TEST" = 1 ]; then
        test_zfs_autobackup
-       sleep 1
        exit 0
     fi
     

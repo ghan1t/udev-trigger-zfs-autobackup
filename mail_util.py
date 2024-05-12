@@ -1,11 +1,12 @@
 import os
 import subprocess
+from typing import Optional
 from email.message import EmailMessage
 from log_util import Logging
 from config_reader import EmailConfig
 
 # Enclose the mail sending logic in a function
-def send_email(subject, body, config: EmailConfig, logger: Logging):
+def send_email(subject: str, body: str, config: EmailConfig, logger: Logging) -> None:
 
     # Create the plain-text email
     message = EmailMessage()
@@ -26,17 +27,20 @@ def send_email(subject, body, config: EmailConfig, logger: Logging):
     except subprocess.CalledProcessError as e:
         logger.error(f"Error sending email to {config.recipients}: {e}")
 
-def mail(message: str, config: EmailConfig, logger: Logging):
+
+def mail(message: str, config: Optional[EmailConfig], logger: Logging) -> None:
     logger.log(message)
     if config is not None:
         send_email("ZFS-Autobackup with UDEV Trigger", message, config, logger)
-    
-def mail_error(message: str, config: EmailConfig, logger: Logging):
+
+
+def mail_error(message: str, config: Optional[EmailConfig], logger: Logging) -> None:
     logger.error(message)
     if config is not None:
         send_email("ERROR: ZFS-Autobackup with UDEV Trigger", message, config, logger)
 
-def mail_exception(message: str, config: EmailConfig, logger: Logging):
+
+def mail_exception(message: str, config: Optional[EmailConfig], logger: Logging) -> None:
     logger.exception(message)
     if config is not None:
         send_email("ERROR: ZFS-Autobackup with UDEV Trigger", message, config, logger)

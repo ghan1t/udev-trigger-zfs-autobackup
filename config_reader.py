@@ -1,12 +1,11 @@
 import sys
 import yaml
-import re
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional
 import json
-from itertools import chain
+import itertools
 
-# Define a data class for your configuration
+
 @dataclass
 class EmailConfig:
     fromaddr: str
@@ -16,7 +15,7 @@ class EmailConfig:
     def __str__(self):
         return json.dumps(asdict(self), indent=2)
 
-# Define a data class for the logging configuration
+
 @dataclass
 class LoggingConfig:
     level: str
@@ -24,11 +23,10 @@ class LoggingConfig:
     def __str__(self):
         return json.dumps(asdict(self), indent=2)
 
-# Define a data class for a single pool configuration
+
 @dataclass
 class PoolConfig:
     pool_name: str
-    split_parameters: bool
     autobackup_parameters: List[str] = field(default_factory=list)
     passphrase: Optional[str] = ""  # Optional, default is empty string
     def __str__(self):
@@ -36,7 +34,8 @@ class PoolConfig:
         data['passphrase'] = '*****' if self.passphrase else self.passphrase  # Replace the passphrase when logging
         return json.dumps(data, indent=2)
 
-# Define a data class for the application configuration including logging and pools
+
+# Application configuration including logging and pools
 @dataclass
 class AppConfig:
     logging: Optional[LoggingConfig] = None
@@ -49,8 +48,9 @@ class AppConfig:
                 data['pools'][pool_key]['passphrase'] = '***'
         return json.dumps(data, indent=2)
 
-# Function to load and validate the YAML config
-def read_validate_config(config_path) -> AppConfig:
+
+# Load and validate the YAML config
+def read_validate_config(config_path: str) -> AppConfig:
     with open(config_path, 'r') as stream:
         try:
             config = yaml.safe_load(stream)
@@ -60,10 +60,11 @@ def read_validate_config(config_path) -> AppConfig:
                 raise ValueError("The 'logging' field is missing or not set.")
             elif config['logging'].get('logfile_path') is None:
                 raise ValueError("The 'logfile_path' field is missing or not set.")
-            if config.get('pools') is None or not config['pools']:
+            if not config['pools']:
                 raise ValueError("The 'pools' field is missing or empty.")
 
             # Check if 'email' key is present in the config
+            email_conf = None
             if 'email' in config:
                 required_keys = ['fromaddr', 'recipients']
                 missing_keys = [key for key in required_keys if key not in config['email']]
@@ -78,8 +79,6 @@ def read_validate_config(config_path) -> AppConfig:
                 # Add validated and stripped recipients back to the config
                 config['email']['recipients'] = recipients
                 email_conf = EmailConfig(**config['email'])
-            else:
-                email_conf = None
             
             # Initialize logging configuration if it's present
             logging_conf = None
@@ -92,11 +91,9 @@ def read_validate_config(config_path) -> AppConfig:
                 for pool_key, pool_values in config['pools'].items():
                     if 'pool_name' not in pool_values or 'autobackup_parameters' not in pool_values:
                         raise ValueError(f"Pool '{pool_key}' is missing mandatory parameters 'pool_name', 'autobackup_parameters'.")
-                    if 'split_parameters' not in pool_values:
-                        pool_values['split_parameters'] = True
-                    if pool_values['split_parameters']:
+                    if pool_values.get('split_parameters', True):
                         # Use map to apply split_if_space to each argument, then flatten the result
-                        pool_values['autobackup_parameters'] = list(chain.from_iterable(map(split_if_space, pool_values['autobackup_parameters'])))
+                        pool_values['autobackup_parameters'] = list(itertools.chain.from_iterable(map(split_if_space, pool_values['autobackup_parameters'])))
 
                     pool_confs[pool_values['pool_name']] = PoolConfig(**pool_values)
             else:
@@ -109,6 +106,7 @@ def read_validate_config(config_path) -> AppConfig:
             sys.exit(f"Error parsing YAML file: {exc}")
         except ValueError as ve:
             sys.exit(f"Configuration validation error: {ve}")
+
 
 def split_if_space(arg: str) -> List[str]:
     # Split the argument by spaces if it contains any, otherwise return it as a single-element list.

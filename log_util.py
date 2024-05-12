@@ -1,9 +1,9 @@
 import logging
+from typing import Optional
 from config_reader import LoggingConfig
 
 class Logging:
-    def __init__(self, config: LoggingConfig):# enable_logging: bool, logfile: str):
-        self.enabled = config != None #enable_logging
+    def __init__(self, config: Optional[LoggingConfig] = None):
         self.logger = logging.getLogger("UDEV-Trigger")
 
         self.logger.propagate = False  # Disable propagation to root logger
@@ -18,7 +18,7 @@ class Logging:
         console_handler.setFormatter(console_formatter)
         self.logger.addHandler(console_handler)
 
-        if self.enabled:
+        if config is not None:
             file_handler = logging.FileHandler(config.logfile_path)
             file_handler.setLevel(config.level)
             file_handler.setFormatter(file_formatter)
@@ -29,11 +29,11 @@ class Logging:
             # logging.disable(true)
             print("Logging disabled")
 
-    def log(self, message: str):
+    def log(self, message: str) -> None:
         self.logger.info(message)
 
-    def error(self, message: str):
+    def error(self, message: str) -> None:
         self.logger.error(message)
 
-    def exception(self, message: str):
+    def exception(self, message: str) -> None:
         self.logger.exception(message)
