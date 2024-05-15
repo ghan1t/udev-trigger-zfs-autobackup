@@ -69,7 +69,7 @@ class UdevAutobackupMonitor:
         except KeyboardInterrupt:
             self.logger.log("Received KeyboardInterrupt...")
         except Exception as e:
-            self.logger.exception(f"An unexpected error occurred: {e}")
+            self.logger.error(f"An unexpected error occurred: {e}")
         finally:
             self.logger.log("Stopping PYUDEV and Shutting down...")
             observer.stop()

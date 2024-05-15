@@ -34,6 +34,3 @@ class Logging:
 
     def error(self, message: str) -> None:
         self.logger.error(message)
-
-    def exception(self, message: str) -> None:
-        self.logger.exception(message)

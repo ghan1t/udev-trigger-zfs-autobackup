@@ -38,9 +38,3 @@ def mail_error(message: str, config: Optional[EmailConfig], logger: Logging) -> 
     logger.error(message)
     if config is not None:
         send_email("ERROR: ZFS-Autobackup with UDEV Trigger", message, config, logger)
-
-
-def mail_exception(message: str, config: Optional[EmailConfig], logger: Logging) -> None:
-    logger.exception(message)
-    if config is not None:
-        send_email("ERROR: ZFS-Autobackup with UDEV Trigger", message, config, logger)
