@@ -1,9 +1,9 @@
-import sys
-import yaml
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional
 import json
-import itertools
+import shlex
+import sys
+from typing import List, Dict, Optional
+import yaml
 
 
 @dataclass
@@ -92,8 +92,8 @@ def read_validate_config(config_path: str) -> AppConfig:
                     if 'pool_name' not in pool_values or 'autobackup_parameters' not in pool_values:
                         raise ValueError(f"Pool '{pool_key}' is missing mandatory parameters 'pool_name', 'autobackup_parameters'.")
                     if pool_values.get('split_parameters', True):
-                        # Use map to apply split_if_space to each argument, then flatten the result
-                        pool_values['autobackup_parameters'] = list(itertools.chain.from_iterable(map(split_if_space, pool_values['autobackup_parameters'])))
+                        # split parameters using shell-like word splitting, and flatten back into a single-level list
+                        pool_values['autobackup_parameters'] = [p2 for p1 in pool_values['autobackup_parameters'] for p2 in shlex.split(p1)]
 
                     pool_confs[pool_values['pool_name']] = PoolConfig(**pool_values)
             else:
@@ -106,8 +106,3 @@ def read_validate_config(config_path: str) -> AppConfig:
             sys.exit(f"Error parsing YAML file: {exc}")
         except ValueError as ve:
             sys.exit(f"Configuration validation error: {ve}")
-
-
-def split_if_space(arg: str) -> List[str]:
-    # Split the argument by spaces if it contains any, otherwise return it as a single-element list.
-    return arg.split(' ') if ' ' in arg else [arg]
