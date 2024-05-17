@@ -3,19 +3,15 @@
 email:
   fromaddr: "admin"
   recipients: "admin"
-  send_autobackup_output: true
 
-# List any pools you want to backup
-# - pool_name: the name of the pool, also the label under /dev/disk/by-label/
-#              current limitation is that each pool_name can only be used once
+# List any pools you want to backup, where the label is the name of the pool (also the label under /dev/disk/by-label)
+# a limitation is that each pool name can be configured only once. As children, include:
 # - autobackup_parameters: the command line arguments you want to pass to zfs-autobackup
 # - split_parameters (optional, true by default): controls shell-style word splitting on zfs-autobackup parameters.
 #                     E.g. if you use '--set-properties readonly=on' this needs to be true (or unset).
-# - passphrase (optional): encryption passphrase, can be an empty string
+# - passphrase (optional): encryption passphrase
 pools:
-  pool1:
-    pool_name: "OnePool"
-    split_parameters: true
+  OnePool:
     autobackup_parameters:
       - "-v"
       - "--debug"
@@ -25,9 +21,8 @@ pools:
       - "--keep-target=10,1d1w,1w1m,1m1y"
       - "zfs-label"
       - "pool/path/to/target/dataset"
-    passphrase: ""
-  pool2:
-    pool_name: "AnotherPool"
+
+  AnotherPool:
     split_parameters: false
     autobackup_parameters:
       - "-v"
@@ -37,4 +32,4 @@ pools:
       - "--keep-target=10,1d1w,1w1m,1m1y"
       - "zfs-label2"
       - "pool/path/to/target/dataset2"
-    passphrase: ""
+    passphrase: "verysecret"
