@@ -17,14 +17,6 @@ class EmailConfig:
 
 
 @dataclass
-class LoggingConfig:
-    level: str
-    logfile_path: str
-    def __str__(self):
-        return json.dumps(asdict(self), indent=2)
-
-
-@dataclass
 class PoolConfig:
     pool_name: str
     autobackup_parameters: List[str] = field(default_factory=list)
@@ -35,10 +27,9 @@ class PoolConfig:
         return json.dumps(data, indent=2)
 
 
-# Application configuration including logging and pools
+# Application configuration including pools
 @dataclass
 class AppConfig:
-    logging: Optional[LoggingConfig] = None
     pools: Dict[str, PoolConfig] = field(default_factory=dict)
     email: Optional[EmailConfig] = field(default=None)
     def __str__(self):
@@ -56,10 +47,6 @@ def read_validate_config(config_path: str) -> AppConfig:
             config = yaml.safe_load(stream)
 
             # Check for mandatory fields
-            if config.get('logging') is None:
-                raise ValueError("The 'logging' field is missing or not set.")
-            elif config['logging'].get('logfile_path') is None:
-                raise ValueError("The 'logfile_path' field is missing or not set.")
             if not config['pools']:
                 raise ValueError("The 'pools' field is missing or empty.")
 
@@ -80,11 +67,6 @@ def read_validate_config(config_path: str) -> AppConfig:
                 config['email']['recipients'] = recipients
                 email_conf = EmailConfig(**config['email'])
             
-            # Initialize logging configuration if it's present
-            logging_conf = None
-            if 'logging' in config:
-                logging_conf = LoggingConfig(**config['logging'])
-
             # Initialize pool configurations if they're present
             pool_confs = {}
             if 'pools' in config:
@@ -99,8 +81,8 @@ def read_validate_config(config_path: str) -> AppConfig:
             else:
                 raise ValueError(f"missing parameter pools'.")
 
-            # Return an AppConfig instance with logging and pool configurations
-            return AppConfig(email=email_conf, logging=logging_conf, pools=pool_confs)
+            # Return an AppConfig instance
+            return AppConfig(email=email_conf, pools=pool_confs)
 
         except yaml.YAMLError as exc:
             sys.exit(f"Error parsing YAML file: {exc}")

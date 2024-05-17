@@ -1,12 +1,13 @@
+from email.message import EmailMessage
+import logging
 import os
 import subprocess
 from typing import Optional
-from email.message import EmailMessage
-from log_util import Logging
+
 from config_reader import EmailConfig
 
 # Enclose the mail sending logic in a function
-def send_email(subject: str, body: str, config: EmailConfig, logger: Logging) -> None:
+def send_email(subject: str, body: str, config: EmailConfig, logger: logging.Logger) -> None:
 
     # Create the plain-text email
     message = EmailMessage()
@@ -23,18 +24,18 @@ def send_email(subject: str, body: str, config: EmailConfig, logger: Logging) ->
     # Send the email
     try:
         subprocess.run(["/usr/sbin/sendmail", "-t", "-i"], env=child_env, input=message.as_bytes(), check=True)
-        logger.log(f"Email sent successfully to {config.recipients}!")
+        logger.debug(f"Email sent successfully to {config.recipients}!")
     except subprocess.CalledProcessError as e:
         logger.error(f"Error sending email to {config.recipients}: {e}")
 
 
-def mail(message: str, config: Optional[EmailConfig], logger: Logging) -> None:
-    logger.log(message)
+def mail(message: str, config: Optional[EmailConfig], logger: logging.Logger) -> None:
+    logger.info(message)
     if config is not None:
         send_email("ZFS-Autobackup with UDEV Trigger", message, config, logger)
 
 
-def mail_error(message: str, config: Optional[EmailConfig], logger: Logging) -> None:
+def mail_error(message: str, config: Optional[EmailConfig], logger: logging.Logger) -> None:
     logger.error(message)
     if config is not None:
         send_email("ERROR: ZFS-Autobackup with UDEV Trigger", message, config, logger)

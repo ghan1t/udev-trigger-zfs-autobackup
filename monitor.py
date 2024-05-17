@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 
 # To be called by trigger.sh
+import argparse
+import logging
+import logging.handlers
 import os
 import pyudev  # type: ignore [import-untyped]
-
-import argparse
-from config_reader import read_validate_config
 import queue
-from log_util import Logging
+import sys
+
+from config_reader import read_validate_config
 from backup import decrypt_and_backup, import_decrypt_backup_export
 
 FINISHED_BEEP_INTERVAL = 10 # seconds
@@ -18,18 +20,18 @@ class UdevAutobackupMonitor:
         self.config = read_validate_config(config_file)
 
         # Set up logging based on configuration
-        self.logger = Logging(self.config.logging)
+        self.logger = logging.getLogger(self.__class__.__name__)
 
     def run(self, test: bool = False):
-        self.logger.log(f"started monitor.py with config:\n{self.config}")
+        self.logger.info(f"started monitor.py with config:\n{self.config}")
         if test:
             for device_label, pool_config in self.config.pools.items():
                 if is_device_connected(device_label):
                     beep()
-                    self.logger.log(f"Starting manual backup on Pool {device_label}...")
+                    self.logger.info(f"Starting manual backup on Pool {device_label}...")
                     decrypt_and_backup(device_label, pool_config, self.config, self.logger)
         else:
-            self.logger.log('Using pyudev version: {0}'.format(pyudev.__version__))
+            self.logger.debug('Using pyudev version: {0}'.format(pyudev.__version__))
             monitor = pyudev.Monitor.from_netlink(pyudev.Context())
             monitor.filter_by('block')
             self._wait_for_udev_triggers(monitor)
@@ -40,7 +42,7 @@ class UdevAutobackupMonitor:
         fs_label = device.get('ID_FS_LABEL')
         #fs_uuid = device.get('ID_FS_UUID')
         if fs_type == "zfs_member" and fs_label and fs_label in self.config.pools and device.action in ("add", "remove"):
-            self.logger.log(f"udev observed {device.action} of pool {fs_label}")
+            self.logger.debug(f"udev observed {device.action} of pool {fs_label}")
             self.device_events.put((device.action, fs_label))
 
     def _wait_for_udev_triggers(self, monitor: pyudev.Monitor) -> None:
@@ -60,18 +62,18 @@ class UdevAutobackupMonitor:
 
                 if action == "add":
                     beep()
-                    self.logger.log(f"Pool {device_label} has been added to queue. Starting backup...")
+                    self.logger.info(f"Pool {device_label} has been added to queue. Starting backup...")
                     import_decrypt_backup_export(device_label, self.config, self.logger)
                     finished_devices.add(device_label)  # Add to finished devices set
                 elif action == "remove":
                     finished_devices.discard(device_label)
 
         except KeyboardInterrupt:
-            self.logger.log("Received KeyboardInterrupt...")
+            self.logger.info("Received KeyboardInterrupt...")
         except Exception as e:
             self.logger.error(f"An unexpected error occurred: {e}")
         finally:
-            self.logger.log("Stopping PYUDEV and Shutting down...")
+            self.logger.info("Stopping PYUDEV and Shutting down...")
             observer.stop()
             # sys.exit(0)
 
@@ -85,6 +87,24 @@ def beep() -> None:
         f.write('\a')
 
 
+def init_logging() -> None:
+    # Always log to syslog at INFO level
+    syslog_handler = logging.handlers.SysLogHandler(address="/dev/log")
+    syslog_handler.setLevel(logging.INFO)
+    logging.basicConfig(
+        format='%(levelname)s: %(message)s',
+        handlers=(syslog_handler,),
+        level=syslog_handler.level)
+
+    # If running on a terminal, assume the user wants debug output
+    if sys.stdout.isatty():
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(console_handler)
+        root_logger.setLevel(console_handler.level)
+
+
 if __name__ == "__main__":
      # Set up command-line argument parsing
     parser = argparse.ArgumentParser(description="UDEV monitor to start zfs-autobackup jobs")
@@ -93,6 +113,8 @@ if __name__ == "__main__":
 
     # Parse command-line arguments
     args = parser.parse_args()
+
+    init_logging()
 
     app = UdevAutobackupMonitor(args.config_file)
     app.run(test=args.test)
