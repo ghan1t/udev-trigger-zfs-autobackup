@@ -1,0 +1,39 @@
+# General settings
+[general]
+beep = true # Unless set to false, the system will beep when starting a backup and periodically after it completes
+
+# Email configuration. Remove this config entirely, if you do not want to send mails.
+# Note that this requires you to have configured TrueNAS email at Alerts -> Email.
+[email]
+from = "admin"
+recipients = ["admin"]
+
+# List any pools you want to backup, including:
+#  name: name of the pool (also the label under /dev/disk/by-label); each pool name can be configured only once
+#  autobackup_parameters: the command line arguments you want to pass to zfs-autobackup
+#  passphrase (optional): encryption passphrase; if used, ensure this file has appropriate permissions!
+[[pools]]
+name = "OnePool"
+autobackup_parameters = [
+    "-v",
+    "--debug",
+    "--clear-mountpoint",
+    "--set-properties", "readlonly=on",
+    "--keep-source=10,1d1w,1w1m,1m1y",
+    "--keep-target=10,1d1w,1w1m,1m1y",
+    "zfs-label",
+    "pool/path/to/target/dataset",
+  ]
+
+[[pools]]
+name = "AnotherPool"
+autobackup_parameters = [
+    "-v",
+    "--debug",
+    "--clear-mountpoint",
+    "--keep-source=10,1d1w,1w1m,1m1y",
+    "--keep-target=10,1d1w,1w1m,1m1y",
+    "zfs-label2",
+    "pool/path/to/target/dataset2",
+  ]
+passphrase = "verysecret"

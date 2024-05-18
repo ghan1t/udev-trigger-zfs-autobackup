@@ -1,110 +1,58 @@
 #!/usr/bin/env python3
 
 import argparse
+from config_reader import AppConfig, PoolConfig
 from contextlib import redirect_stdout, redirect_stderr
-import dataclasses
 from email.message import EmailMessage
+import enum
 import io
 import logging
 import logging.handlers
 import os
+from pep3143daemon import DaemonContext, PidFile  # type: ignore [import-untyped]
 import pyudev  # type: ignore [import-untyped]
 import queue
-import shlex
+import signal
 import subprocess
 import sys
 import traceback
-from typing import Dict, List, Optional, TextIO
-import yaml
+from typing import Optional
 from zfs_autobackup.ZfsAutobackup import ZfsAutobackup  # type: ignore [import-untyped]
 
+APP_NAME = 'trigger-zfs-autobackup'
+PID_FILE_PATH = f'/var/run/{APP_NAME}.pid'
 FINISHED_BEEP_INTERVAL = 10 # seconds
 
-logger = logging.getLogger('ZfsAutobackupTrigger')
-
-
-class SecretStr(str):
-    """String class that hides its value."""
-
-    def __str__(self) -> str:
-        return '*****'
-
-    def __repr__(self) -> str:
-        return self.__str__()
-
-
-@dataclasses.dataclass
-class EmailConfig:
-    fromaddr: str = dataclasses.field(default='admin')
-    recipients: List[str] = dataclasses.field(default_factory=list)
-
-
-@dataclasses.dataclass
-class PoolConfig:
-    pool_name: str
-    autobackup_parameters: List[str] = dataclasses.field(default_factory=list)
-    passphrase: Optional[SecretStr] = dataclasses.field(default=None)
-
-
-@dataclasses.dataclass
-class AppConfig:
-    pools: Dict[str, PoolConfig] = dataclasses.field(default_factory=dict)
-    email: EmailConfig = dataclasses.field(default_factory=EmailConfig)
-
-
-# Load and validate the YAML config
-def read_validate_config(config_stream: TextIO) -> AppConfig:
-    config = yaml.safe_load(config_stream)
-
-    # Check if 'email' key is present in the config
-    email_conf = None
-    if 'email' in config:
-        recipients_str = config['email'].get('recipients')
-        if not isinstance(recipients_str, str) or not recipients_str:
-            raise ValueError("The 'recipients' key must be a non-empty string.")
-        
-        # Add validated and stripped recipients back to the config
-        config['email']['recipients'] = [email.strip() for email in recipients_str.split(',')]
-        email_conf = EmailConfig(**config['email'])
-    else:
-        email_conf = EmailConfig()
-
-    # Initialize pool configurations if they're present
-    pool_confs = {}
-    if 'pools' in config:
-        for pool_key, pool_values in config['pools'].items():
-            if 'autobackup_parameters' not in pool_values:
-                raise ValueError(f"Pool '{pool_key}' is missing mandatory parameter 'autobackup_parameters'.")
-            if pool_values.get('split_parameters', True):
-                # split parameters using shell-like word splitting, and flatten back into a single-level list
-                pool_values['autobackup_parameters'] = [p2 for p1 in pool_values['autobackup_parameters'] for p2 in shlex.split(p1)]
-            if 'passphrase' in pool_values:
-                pool_values['passphrase'] = SecretStr(pool_values['passphrase'])
-
-            pool_confs[pool_key] = PoolConfig(pool_key, **pool_values)
-    else:
-        raise ValueError("The 'pools' field is missing or empty.")
-
-    return AppConfig(email=email_conf, pools=pool_confs)
+logger = logging.getLogger(APP_NAME)
 
 
 class UdevAutobackupMonitor:
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, *, daemon: bool):
         self.device_events: queue.Queue[tuple[str, str]] = queue.Queue()
         self.config = config
+        self.daemon = DaemonContext(pidfile=PidFile(PID_FILE_PATH)) if daemon else None
 
-    def run(self, test: bool = False):
-        logger.info(f"started with config: {self.config}")
-        if test:
-            for device_label, pool_config in self.config.pools.items():
-                if is_device_connected(device_label):
-                    logger.info(f"Starting manual backup on Pool {device_label}...")
-                    import_decrypt_backup_export(pool_config)
-        else:
-            logger.debug('Using pyudev version: {0}'.format(pyudev.__version__))
-            monitor = pyudev.Monitor.from_netlink(pyudev.Context())
-            monitor.filter_by('block')
-            self._wait_for_udev_triggers(monitor)
+    def test(self) -> None:
+        def is_device_connected(device_label: str) -> bool:
+            return os.path.islink(os.path.join('/dev/disk/by-label', device_label))
+
+        logger.info(f"Testing with config: {self.config}")
+        for device_label, pool_config in self.config.pools.items():
+            if is_device_connected(device_label):
+                logger.info(f"Starting manual backup on Pool {device_label}...")
+                import_decrypt_backup_export(pool_config)
+
+    def run(self) -> None:
+        logger.info(f"Waiting for devices: {', '.join(self.config.pools.keys())}")
+        logger.debug('Using pyudev version: {0}'.format(pyudev.__version__))
+
+        monitor = pyudev.Monitor.from_netlink(pyudev.Context())
+        monitor.filter_by('block')
+
+        if self.daemon:
+            self.daemon.open()
+
+        self._wait_for_udev_triggers(monitor)
 
     # Callback for device events, runs in a separate thread
     def _device_callback(self, device: pyudev.Device) -> None:
@@ -127,11 +75,11 @@ class UdevAutobackupMonitor:
                     action, device_label = self.device_events.get(block=True, timeout=(FINISHED_BEEP_INTERVAL if finished_devices else None))
                 except queue.Empty:
                     # Continuously beep for finished devices if they are still connected
-                    beep()
+                    self.beep()
                     continue
 
                 if action == "add":
-                    beep()
+                    self.beep()
                     self._do_backup(device_label)
                     finished_devices.add(device_label)  # Add to finished devices set
                 elif action == "remove":
@@ -155,7 +103,7 @@ class UdevAutobackupMonitor:
                 f"Plugged in disk {device_label} that is not matching any configuration. You can unplug it again safely.")
             return
 
-        assert pool_config.pool_name == device_label
+        assert pool_config.name == device_label
         logger.info(f"Pool {device_label} has been added to queue. Starting backup...")
 
         try:
@@ -198,34 +146,39 @@ class UdevAutobackupMonitor:
         except subprocess.CalledProcessError as e:
             logger.exception(f"Error sending email to {self.config.email.recipients}")
 
+    def beep(self) -> None:
+        if self.config.beep:
+            with open('/dev/tty5','w') as f:
+                f.write('\a')
+
 
 def import_decrypt_backup_export(pool_config: PoolConfig) -> tuple[bool, str]:
-    logger.debug(f"Importing pool {pool_config.pool_name}")
-    result = run_command(["zpool", "import", pool_config.pool_name, "-N"])
+    logger.debug(f"Importing pool {pool_config.name}")
+    result = run_command(["zpool", "import", pool_config.name, "-N"])
     if result.returncode != 0:
         return False, f"Failed to import pool. Backup not yet run.\n" + result.stderr
 
     if pool_config.passphrase:
-        logger.debug(f"Decrypting pool {pool_config.pool_name}")
-        result = run_command(["zfs", "load-key", pool_config.pool_name], input=pool_config.passphrase)
+        logger.debug(f"Decrypting pool {pool_config.name}")
+        result = run_command(["zfs", "load-key", pool_config.name], input=pool_config.passphrase)
         if result.returncode != 0:
             return False, f"Failed to decrypt pool. Backup not yet run.\n" + result.stderr
 
-    logger.info(f"Starting ZFS-Autobackup for pool {pool_config.pool_name} with parameters: " + " ".join(pool_config.autobackup_parameters))
+    logger.info(f"Starting ZFS-Autobackup for pool {pool_config.name} with parameters: " + " ".join(pool_config.autobackup_parameters))
     success, stdout, stderr = run_zfs_autobackup(pool_config.autobackup_parameters)
     if not success or stderr: # something went wrong
         logger.error("ZFS autobackup failed")
-        return False, "ZFS autobackup error! Disk will not be exported automatically.\n" + stderr
+        return False, "ZFS autobackup error! Disk will not be exported automatically.\n" + stderr + stdout
     elif stdout:
         logger.info(stdout)
 
-    logger.debug(f"Setting pool {pool_config.pool_name} to read-only")
-    result = run_command(["zfs", "set", "readonly=on", pool_config.pool_name])
+    logger.debug(f"Setting pool {pool_config.name} to read-only")
+    result = run_command(["zfs", "set", "readonly=on", pool_config.name])
     if result.returncode != 0:
         return False, f"Failed to set pool readonly. Backup succeeded, but disk will not be exported automatically.\n" + result.stderr
 
-    logger.debug(f"Exporting {pool_config.pool_name}")
-    result = run_command(["zpool", "export", pool_config.pool_name])
+    logger.debug(f"Exporting {pool_config.name}")
+    result = run_command(["zpool", "export", pool_config.name])
     if result.returncode != 0:
         return False, f"Failed to export pool. Backup succeeded, but disk will not be exported automatically.\n" + result.stderr
 
@@ -260,16 +213,7 @@ def run_command(command: list[str], input: Optional[str] = None) -> subprocess.C
     return result
 
 
-def is_device_connected(device_label: str) -> bool:
-    return os.path.islink(os.path.join('/dev/disk/by-label', device_label))
-
-
-def beep() -> None:
-    with open('/dev/tty5','w') as f:
-        f.write('\a')
-
-
-def init_logging() -> None:
+def init_logging(run_as_daemon: bool) -> None:
     # Always log to syslog at INFO level
     syslog_handler = logging.handlers.SysLogHandler(address="/dev/log")
     syslog_handler.setLevel(logging.INFO)
@@ -279,7 +223,7 @@ def init_logging() -> None:
         level=syslog_handler.level)
 
     # If running on a terminal, assume the user wants debug output
-    if sys.stdout.isatty():
+    if not run_as_daemon and sys.stdout.isatty():
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.DEBUG)
         root_logger = logging.getLogger()
@@ -290,21 +234,51 @@ def init_logging() -> None:
 if __name__ == "__main__":
      # Set up command-line argument parsing
     parser = argparse.ArgumentParser(description="Triggers zfs-autobackup jobs on disk hotplug events")
-    parser.add_argument('config_file', type=argparse.FileType("r"), help='Path to the YAML config file')
-    parser.add_argument("--test", help="test zfs-backup with the given config file", action="store_true")
+    parser.add_argument('config_file', type=argparse.FileType("rb"), help='Path to the config file', nargs='?')
+
+    Action = enum.Enum('Action', ['TEST', 'START', 'STOP', 'RESTART'])
+    g = parser.add_mutually_exclusive_group()
+    g.add_argument("--start", help="Start as a daemon process", action="store_const", dest='action', const=Action.START)
+    g.add_argument("--stop", help="Stop a running daemon process", action="store_const", dest='action', const=Action.STOP)
+    g.add_argument("--restart", help="Restart a running daemon process", action="store_const", dest='action', const=Action.RESTART)
+    g.add_argument("--test", help="Run a one-time backup for all configured pools, then exit", action="store_const", dest='action', const=Action.TEST)
 
     # Parse command-line arguments
     args = parser.parse_args()
 
-    try:
-        config = read_validate_config(args.config_file)
-    except yaml.YAMLError as e:
-        sys.stderr.write(f"Error parsing YAML file: {e}\n")
-        sys.exit(1)
-    except ValueError as e:
-        sys.stderr.write(f"Configuration validation error: {e}\n")
-        sys.exit(1)
-    
-    init_logging()
-    app = UdevAutobackupMonitor(config)
-    app.run(test=args.test)
+    # Parse config file
+    if args.config_file is not None:
+        try:
+            config = AppConfig.parse_and_validate_file(args.config_file)
+        except (ValueError, TypeError) as e:
+            sys.stderr.write(f"Error in configuration file: {e}\n")
+            sys.exit(1)
+        args.config_file.close()
+    elif args.action != Action.STOP:
+        parser.error('config file argument is required')
+
+    run_as_daemon = args.action in {Action.START, Action.RESTART}
+    init_logging(run_as_daemon)
+
+    # Stop an existing daemon
+    if args.action in {Action.STOP, Action.RESTART}:
+        oldpid = None
+        try:
+            with open(PID_FILE_PATH, 'r') as fh:
+                oldpid = int(fh.read())
+        except OSError:
+            pass
+
+        if oldpid is not None:
+            try:
+                os.kill(oldpid, signal.SIGTERM)
+                print(f"Sent SIGTERM to PID {oldpid}")
+            except ProcessLookupError:
+                pass
+
+    if args.action != Action.STOP:
+        app = UdevAutobackupMonitor(config, daemon=run_as_daemon)
+        if args.action == Action.TEST:
+            app.test()
+        else:
+            app.run()
