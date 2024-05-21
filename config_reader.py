@@ -8,18 +8,13 @@ from itertools import chain
 
 # Define a data class for your configuration
 @dataclass
-class SmtpConfig:
-    server: str
-    port: int
-    login: str
-    password: str
+class EmailConfig:
+    fromaddr: str
     recipients: List[str]
     send_autobackup_output: bool
 
     def __str__(self):
-        data = asdict(self)
-        data['password'] = '*****'  # Replace the password when logging
-        return json.dumps(data, indent=2)
+        return json.dumps(asdict(self), indent=2)
 
 # Define a data class for the logging configuration
 @dataclass
@@ -46,11 +41,9 @@ class PoolConfig:
 class AppConfig:
     logging: Optional[LoggingConfig] = None
     pools: Dict[str, PoolConfig] = field(default_factory=dict)
-    smtp: SmtpConfig = field(default=None)
+    email: Optional[EmailConfig] = field(default=None)
     def __str__(self):
         data = asdict(self)
-        if data.get('smtp'):
-            data['smtp']['password'] = '***'
         for pool_key, pool in data.get('pools', {}).items():
             if 'passphrase' in pool and pool['passphrase']:
                 data['pools'][pool_key]['passphrase'] = '***'
@@ -70,26 +63,23 @@ def read_validate_config(config_path) -> AppConfig:
             if config.get('pools') is None or not config['pools']:
                 raise ValueError("The 'pools' field is missing or empty.")
 
-            # Check if 'smtp' key is present in the config
-            if 'smtp' in config:
-                required_keys = ['server', 'port', 'login', 'password', 'recipients']
-                missing_keys = [key for key in required_keys if key not in config['smtp']]
+            # Check if 'email' key is present in the config
+            if 'email' in config:
+                required_keys = ['fromaddr', 'recipients']
+                missing_keys = [key for key in required_keys if key not in config['email']]
                 if missing_keys:
-                    raise ValueError(f"Missing required smtp config keys: {', '.join(missing_keys)}")
+                    raise ValueError(f"Missing required email config keys: {', '.join(missing_keys)}")
                 # Validate each email address in the comma-separated recipients list
-                recipients_str = config['smtp']['recipients']
+                recipients_str = config['email']['recipients']
                 if not isinstance(recipients_str, str) or not recipients_str:
                     raise ValueError("The 'recipients' key must be a non-empty string.")
                 recipients = [email.strip() for email in recipients_str.split(',')]
-                invalid_emails = [email for email in recipients if not is_valid_email(email)]
-                if invalid_emails:
-                    raise ValueError(f"Invalid email addresses found: {', '.join(invalid_emails)}")
                 
                 # Add validated and stripped recipients back to the config
-                config['smtp']['recipients'] = recipients
-                smtp_conf = SmtpConfig(**config['smtp'])
+                config['email']['recipients'] = recipients
+                email_conf = EmailConfig(**config['email'])
             else:
-                smtp_conf = None
+                email_conf = None
             
             # Initialize logging configuration if it's present
             logging_conf = None
@@ -113,17 +103,12 @@ def read_validate_config(config_path) -> AppConfig:
                 raise ValueError(f"missing parameter pools'.")
 
             # Return an AppConfig instance with logging and pool configurations
-            return AppConfig(smtp=smtp_conf, logging=logging_conf, pools=pool_confs)
+            return AppConfig(email=email_conf, logging=logging_conf, pools=pool_confs)
 
         except yaml.YAMLError as exc:
             sys.exit(f"Error parsing YAML file: {exc}")
         except ValueError as ve:
             sys.exit(f"Configuration validation error: {ve}")
-
-def is_valid_email(email):
-    # Simple regex for validating an email address
-    pattern = r"(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)"
-    return re.match(pattern, email) is not None
 
 def split_if_space(arg: str) -> List[str]:
     # Split the argument by spaces if it contains any, otherwise return it as a single-element list.
