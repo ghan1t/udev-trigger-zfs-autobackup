@@ -4,6 +4,7 @@ import argparse
 from config_reader import AppConfig, PoolConfig
 from contextlib import redirect_stdout, redirect_stderr
 from email.message import EmailMessage
+import email.policy
 import enum
 import io
 import logging
@@ -17,7 +18,15 @@ import subprocess
 import sys
 import traceback
 from typing import Optional
-from zfs_autobackup.ZfsAutobackup import ZfsAutobackup  # type: ignore [import-untyped]
+
+# Kludge: zfs-autobackup captures sys.argv[0] at import time for use in log output
+_real_argv0 = sys.argv[0]
+try:
+    sys.argv[0] = 'zfs-autobackup'
+    from zfs_autobackup.ZfsAutobackup import ZfsAutobackup  # type: ignore [import-untyped]
+finally:
+    sys.argv[0] = _real_argv0
+    del _real_argv0
 
 APP_NAME = 'trigger-zfs-autobackup'
 PID_FILE_PATH = f'/var/run/{APP_NAME}.pid'
@@ -36,11 +45,12 @@ class UdevAutobackupMonitor:
         def is_device_connected(device_label: str) -> bool:
             return os.path.islink(os.path.join('/dev/disk/by-label', device_label))
 
-        logger.info(f"Testing with config: {self.config}")
+        print(f"Testing with config: {self.config}")
         for device_label, pool_config in self.config.pools.items():
             if is_device_connected(device_label):
-                logger.info(f"Starting manual backup on Pool {device_label}...")
-                import_decrypt_backup_export(pool_config)
+                print(f"Starting manual backup on pool {device_label}...")
+                _, msg = import_decrypt_backup_export(pool_config)
+                print(msg)
 
     def run(self) -> None:
         logger.info(f"Waiting for devices: {', '.join(self.config.pools.keys())}")
@@ -128,11 +138,11 @@ class UdevAutobackupMonitor:
             return
 
         # Create the plain-text email
-        message = EmailMessage()
-        message.set_content(body)  # Set email body
-        message['Subject'] = 'ZFS-Autobackup Trigger: ' + subject  # Set email subject
-        message['From'] = self.config.email.fromaddr  # Set email from
-        message['To'] = self.config.email.recipients # All recipients
+        message = EmailMessage(policy=email.policy.default)
+        message['From'] = self.config.email.fromaddr
+        message['To'] = self.config.email.recipients
+        message['Subject'] = f"[{APP_NAME}] {subject}"
+        message.set_content(body, cte='8bit')
 
         # On TrueNAS, sendmail is a python script, so we must not leak our private venv to it.
         child_env = os.environ
@@ -192,18 +202,19 @@ def run_zfs_autobackup(args: list[str]) -> tuple[bool, str, str]:
     :param args: List of command-line arguments to pass to ZfsAutobackup CLI.
     :return: 3-tuple of a boolean success flag, the captured stdout, and captured stderr.
     """
-    # Capture both standard output and standard error
+
+    success = False
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
-    with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-        real_argv0 = sys.argv[0]
-        try:
-            sys.argv[0] = 'zfs-autobackup'
+
+    try:
+        with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
             failed_datasets = ZfsAutobackup(args, print_arguments=False).run()
-        finally:
-            sys.argv[0] = real_argv0
-    
-    return failed_datasets == 0, stdout_capture.getvalue(), stderr_capture.getvalue()
+        success = (failed_datasets == 0)
+    except SystemExit as e:
+        logger.error(f"zfs-autobackup exited with code {e.code}")
+
+    return success, stdout_capture.getvalue(), stderr_capture.getvalue()
 
 
 def run_command(command: list[str], input: Optional[str] = None) -> subprocess.CompletedProcess:
@@ -218,7 +229,7 @@ def init_logging(run_as_daemon: bool) -> None:
     syslog_handler = logging.handlers.SysLogHandler(address="/dev/log")
     syslog_handler.setLevel(logging.INFO)
     logging.basicConfig(
-        format='%(levelname)s: %(message)s',
+        format=APP_NAME + ' %(levelname)s: %(message)s',
         handlers=(syslog_handler,),
         level=syslog_handler.level)
 
