@@ -13,7 +13,7 @@ recipients = ["admin"]
 #  autobackup_parameters: the command line arguments you want to pass to zfs-autobackup
 #  passphrase (optional): encryption passphrase; if used, ensure this file has appropriate permissions!
 [[pools]]
-name = "OnePool"
+name = "zfs-label"
 autobackup_parameters = [
     "-v",
     "--debug",
@@ -26,7 +26,7 @@ autobackup_parameters = [
   ]
 
 [[pools]]
-name = "AnotherPool"
+name = "zfs-label2"
 autobackup_parameters = [
     "-v",
     "--debug",
