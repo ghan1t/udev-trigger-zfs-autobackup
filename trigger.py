@@ -128,7 +128,7 @@ class UdevAutobackupMonitor:
         if success:
             logger.info(f"Backup of {device_label} completed")
             self._send_email(
-                f"Backup of {device_label} completed", 
+                f"Backup of {device_label} completed",
                 f"Backup finished. You can safely unplug the disk {device_label} now.\n\n" + msg)
         else:
             self._send_email(f"Error backing up {device_label}", msg)
@@ -153,12 +153,12 @@ class UdevAutobackupMonitor:
         try:
             subprocess.run(["/usr/sbin/sendmail", "-t", "-i"], env=child_env, input=message.as_bytes(), check=True)
             logger.debug(f"Email about {subject} sent to {self.config.email.recipients}")
-        except subprocess.CalledProcessError as e:
+        except subprocess.CalledProcessError:
             logger.exception(f"Error sending email to {self.config.email.recipients}")
 
     def beep(self) -> None:
         if self.config.beep:
-            with open('/dev/tty5','w') as f:
+            with open('/dev/tty5', 'w') as f:
                 f.write('\a')
 
 
@@ -166,13 +166,13 @@ def import_decrypt_backup_export(pool_config: PoolConfig) -> tuple[bool, str]:
     logger.debug(f"Importing pool {pool_config.name}")
     result = run_command(["zpool", "import", pool_config.name, "-N"])
     if result.returncode != 0:
-        return False, f"Failed to import pool. Backup not yet run.\n" + result.stderr
+        return False, "Failed to import pool. Backup not yet run.\n" + result.stderr
 
     if pool_config.passphrase:
         logger.debug(f"Decrypting pool {pool_config.name}")
         result = run_command(["zfs", "load-key", pool_config.name], input=pool_config.passphrase)
         if result.returncode != 0:
-            return False, f"Failed to decrypt pool. Backup not yet run.\n" + result.stderr
+            return False, "Failed to decrypt pool. Backup not yet run.\n" + result.stderr
 
     logger.info(f"Starting ZFS-Autobackup for pool {pool_config.name} with parameters: " + " ".join(pool_config.autobackup_parameters))
     success, stdout, stderr = run_zfs_autobackup(pool_config.autobackup_parameters)
@@ -185,12 +185,12 @@ def import_decrypt_backup_export(pool_config: PoolConfig) -> tuple[bool, str]:
     logger.debug(f"Setting pool {pool_config.name} to read-only")
     result = run_command(["zfs", "set", "readonly=on", pool_config.name])
     if result.returncode != 0:
-        return False, f"Failed to set pool readonly. Backup succeeded, but disk will not be exported automatically.\n" + result.stderr
+        return False, "Failed to set pool readonly. Backup succeeded, but disk will not be exported automatically.\n" + result.stderr
 
     logger.debug(f"Exporting {pool_config.name}")
     result = run_command(["zpool", "export", pool_config.name])
     if result.returncode != 0:
-        return False, f"Failed to export pool. Backup succeeded, but disk will not be exported automatically.\n" + result.stderr
+        return False, "Failed to export pool. Backup succeeded, but disk will not be exported automatically.\n" + result.stderr
 
     return True, stdout
 
@@ -243,7 +243,7 @@ def init_logging(run_as_daemon: bool) -> None:
 
 
 if __name__ == "__main__":
-     # Set up command-line argument parsing
+    # Set up command-line argument parsing
     parser = argparse.ArgumentParser(description="Triggers zfs-autobackup jobs on disk hotplug events")
     parser.add_argument('config_file', type=argparse.FileType("rb"), help='Path to the config file', nargs='?')
 
