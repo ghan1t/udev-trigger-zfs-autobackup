@@ -1,115 +1,98 @@
-import sys
-import yaml
-import re
-from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional
-import json
-from itertools import chain
+import dataclasses
+import tomllib
+from typing import Any, BinaryIO, Optional, Self
 
-# Define a data class for your configuration
-@dataclass
+
+class SecretStr(str):
+    """String class that hides its value."""
+
+    def __str__(self) -> str:
+        return '*****'
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+
+@dataclasses.dataclass
 class EmailConfig:
-    fromaddr: str
-    recipients: List[str]
-    send_autobackup_output: bool
+    fromaddr: str = 'admin'
+    recipients: list[str] = dataclasses.field(default_factory=list)
 
-    def __str__(self):
-        return json.dumps(asdict(self), indent=2)
+    @classmethod
+    def parse(cls, d: dict[str, Any]) -> Self:
+        # rename 'from' (which is a reserved word) to 'fromaddr'
+        if 'from' in d:
+            d['fromaddr'] = d.pop('from')
 
-# Define a data class for the logging configuration
-@dataclass
-class LoggingConfig:
-    level: str
-    logfile_path: str
-    def __str__(self):
-        return json.dumps(asdict(self), indent=2)
+        return cls(**d)
 
-# Define a data class for a single pool configuration
-@dataclass
+    def validate(self) -> None:
+        if not isinstance(self.fromaddr, str):
+            raise TypeError(f"Email fromaddr must be a string, not {self.fromaddr}")
+        if not (isinstance(self.recipients, list) and all(isinstance(e, str) for e in self.recipients)):
+            raise TypeError(f"Email recipients must be a list of strings, not {self.recipients}")
+
+
+@dataclasses.dataclass
 class PoolConfig:
-    pool_name: str
-    split_parameters: bool
-    autobackup_parameters: List[str] = field(default_factory=list)
-    passphrase: Optional[str] = ""  # Optional, default is empty string
-    def __str__(self):
-        data = asdict(self)
-        data['passphrase'] = '*****' if self.passphrase else self.passphrase  # Replace the passphrase when logging
-        return json.dumps(data, indent=2)
+    name: str
+    autobackup_parameters: list[str] = dataclasses.field(default_factory=list)
+    passphrase: Optional[SecretStr] = None
 
-# Define a data class for the application configuration including logging and pools
-@dataclass
+    @classmethod
+    def parse(cls, d: dict[str, Any]) -> Self:
+        if (passphrase := d.get('passphrase')): # wrap passphrase in a SecretStr
+            d['passphrase'] = SecretStr(passphrase)
+
+        return cls(**d)
+
+    def validate(self) -> None:
+        if not isinstance(self.name, str):
+            raise TypeError(f"Pool name must be a string, not {self.name}")
+        if not (isinstance(self.autobackup_parameters, list) and all(isinstance(e, str) for e in self.autobackup_parameters)):
+            raise TypeError(f"autobackup_parameters must be a list of strings, not {self.autobackup_parameters}")
+
+
+@dataclasses.dataclass
 class AppConfig:
-    logging: Optional[LoggingConfig] = None
-    pools: Dict[str, PoolConfig] = field(default_factory=dict)
-    email: Optional[EmailConfig] = field(default=None)
-    def __str__(self):
-        data = asdict(self)
-        for pool_key, pool in data.get('pools', {}).items():
-            if 'passphrase' in pool and pool['passphrase']:
-                data['pools'][pool_key]['passphrase'] = '***'
-        return json.dumps(data, indent=2)
+    pools: dict[str, PoolConfig] = dataclasses.field(default_factory=dict)
+    email: EmailConfig = dataclasses.field(default_factory=EmailConfig)
+    beep: bool = True
 
-# Function to load and validate the YAML config
-def read_validate_config(config_path) -> AppConfig:
-    with open(config_path, 'r') as stream:
+    @classmethod
+    def parse(cls, d: dict[str, Any]) -> Self:
+        unknown_keys = d.keys() - {'pools', 'email', 'general'}
+        if unknown_keys:
+            raise ValueError(f"Unsupported configuration keys: {', '.join(unknown_keys)}")
+
+        pools = {}
+        for pd in d.get('pools', []):
+            pool = PoolConfig.parse(pd)
+            if pool.name in pools:
+                raise ValueError(f"Pool {pool.name} has multiple definitions")
+            pools[pool.name] = pool
+
+        if not pools:
+            raise ValueError("No pools are configured")
+
+        email = EmailConfig.parse(d.get('email', {}))
+
+        return cls(pools, email, **d.get('general', {}))
+
+    def validate(self) -> None:
+        for pool in self.pools.values():
+            pool.validate()
+        self.email.validate()
+        if not isinstance(self.beep, bool):
+            raise TypeError(f"beep must be a boolean, not {self.beep}")
+
+    @classmethod
+    def parse_and_validate_file(cls, stream: BinaryIO) -> Self:
         try:
-            config = yaml.safe_load(stream)
+            d = tomllib.load(stream)
+        except tomllib.TOMLDecodeError as e:
+            raise ValueError("Failed to parse configuration file") from e
 
-            # Check for mandatory fields
-            if config.get('logging') is None:
-                raise ValueError("The 'logging' field is missing or not set.")
-            elif config['logging'].get('logfile_path') is None:
-                raise ValueError("The 'logfile_path' field is missing or not set.")
-            if config.get('pools') is None or not config['pools']:
-                raise ValueError("The 'pools' field is missing or empty.")
-
-            # Check if 'email' key is present in the config
-            if 'email' in config:
-                required_keys = ['fromaddr', 'recipients']
-                missing_keys = [key for key in required_keys if key not in config['email']]
-                if missing_keys:
-                    raise ValueError(f"Missing required email config keys: {', '.join(missing_keys)}")
-                # Validate each email address in the comma-separated recipients list
-                recipients_str = config['email']['recipients']
-                if not isinstance(recipients_str, str) or not recipients_str:
-                    raise ValueError("The 'recipients' key must be a non-empty string.")
-                recipients = [email.strip() for email in recipients_str.split(',')]
-                
-                # Add validated and stripped recipients back to the config
-                config['email']['recipients'] = recipients
-                email_conf = EmailConfig(**config['email'])
-            else:
-                email_conf = None
-            
-            # Initialize logging configuration if it's present
-            logging_conf = None
-            if 'logging' in config:
-                logging_conf = LoggingConfig(**config['logging'])
-
-            # Initialize pool configurations if they're present
-            pool_confs = {}
-            if 'pools' in config:
-                for pool_key, pool_values in config['pools'].items():
-                    if 'pool_name' not in pool_values or 'autobackup_parameters' not in pool_values:
-                        raise ValueError(f"Pool '{pool_key}' is missing mandatory parameters 'pool_name', 'autobackup_parameters'.")
-                    if 'split_parameters' not in pool_values:
-                        pool_values['split_parameters'] = True
-                    if pool_values['split_parameters']:
-                        # Use map to apply split_if_space to each argument, then flatten the result
-                        pool_values['autobackup_parameters'] = list(chain.from_iterable(map(split_if_space, pool_values['autobackup_parameters'])))
-
-                    pool_confs[pool_values['pool_name']] = PoolConfig(**pool_values)
-            else:
-                raise ValueError(f"missing parameter pools'.")
-
-            # Return an AppConfig instance with logging and pool configurations
-            return AppConfig(email=email_conf, logging=logging_conf, pools=pool_confs)
-
-        except yaml.YAMLError as exc:
-            sys.exit(f"Error parsing YAML file: {exc}")
-        except ValueError as ve:
-            sys.exit(f"Configuration validation error: {ve}")
-
-def split_if_space(arg: str) -> List[str]:
-    # Split the argument by spaces if it contains any, otherwise return it as a single-element list.
-    return arg.split(' ') if ' ' in arg else [arg]
+        config = cls.parse(d)
+        config.validate()
+        return config
