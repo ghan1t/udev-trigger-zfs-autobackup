@@ -36,10 +36,9 @@ logger = logging.getLogger(APP_NAME)
 
 
 class UdevAutobackupMonitor:
-    def __init__(self, config: AppConfig, *, daemon: bool):
+    def __init__(self, config: AppConfig):
         self.device_events: queue.Queue[tuple[str, str]] = queue.Queue()
         self.config = config
-        self.daemon = DaemonContext(pidfile=PidFile(PID_FILE_PATH)) if daemon else None
 
     def test(self) -> None:
         def is_device_connected(device_label: str) -> bool:
@@ -52,15 +51,16 @@ class UdevAutobackupMonitor:
                 _, msg = import_decrypt_backup_export(pool_config)
                 print(msg)
 
-    def run(self) -> None:
+    def run(self, *, daemon: bool = False) -> None:
         logger.info(f"Waiting for devices: {', '.join(self.config.pools.keys())}")
         logger.debug('Using pyudev version: {0}'.format(pyudev.__version__))
 
         monitor = pyudev.Monitor.from_netlink(pyudev.Context())
         monitor.filter_by('block')
 
-        if self.daemon:
-            self.daemon.open()
+        if daemon:
+            daemon_ctx = DaemonContext(pidfile=PidFile(PID_FILE_PATH), files_preserve=[monitor])
+            daemon_ctx.open()
 
         self._wait_for_udev_triggers(monitor)
 
@@ -288,8 +288,8 @@ if __name__ == "__main__":
                 pass
 
     if args.action != Action.STOP:
-        app = UdevAutobackupMonitor(config, daemon=run_as_daemon)
+        app = UdevAutobackupMonitor(config)
         if args.action == Action.TEST:
             app.test()
         else:
-            app.run()
+            app.run(daemon=run_as_daemon)
